@@ -1,0 +1,25 @@
+# Environment variables containing sensitive data
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# Local data files
+data/
+*.csv
+*.json
+*.log
+
+# VS Code settings
+.vscode/
+
+# Azure deployment files (optional)
+# Uncomment if you don't want to track deployment artifacts
+# .azure/

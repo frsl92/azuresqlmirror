@@ -1,0 +1,148 @@
+# Deploys Azure SQL Server + Database using Bicep
+param(
+    [Parameter(Mandatory=$true)] [string]$ResourceGroupName,
+    [Parameter(Mandatory=$true)] [string]$Location,
+    [Parameter(Mandatory=$true)] [string]$SqlServerName,
+    [Parameter(Mandatory=$true)] [string]$AdministratorLogin,
+    [Parameter(Mandatory=$true)] [securestring]$AdministratorPassword,
+    [string]$DatabaseName = 'fabricMirrorDemoDb',
+    [string]$SkuName = 'S0',
+    [bool]$AllowAllInternetIPs = $true,
+    [string]$StartIpAddress = '0.0.0.0',
+    [string]$EndIpAddress = '0.0.0.0'
+)
+
+Write-Host "🚀 Azure SQL Fabric Demo Deployment Script" -ForegroundColor Magenta
+Write-Host "===========================================" -ForegroundColor Magenta
+
+# Validate Azure CLI is installed and user is logged in
+Write-Host "🔍 Checking Azure CLI installation..." -ForegroundColor Yellow
+az version
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "❌ Azure CLI is not installed or not accessible. Please install Azure CLI first."
+    exit 1
+}
+Write-Host "✅ Azure CLI is installed and accessible" -ForegroundColor Green
+
+# Check if user is logged in
+Write-Host "🔐 Checking Azure CLI login status..." -ForegroundColor Yellow
+$accountInfo = az account show 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "🔑 Not logged in to Azure. Please login..." -ForegroundColor Yellow
+    az login
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "❌ Failed to login to Azure"
+        exit 1
+    }
+    # Get account info after successful login
+    $accountInfo = az account show 2>$null
+}
+
+$account = $accountInfo | ConvertFrom-Json
+Write-Host "✅ Logged in as: $($account.user.name)" -ForegroundColor Green
+Write-Host "📋 Subscription: $($account.name) ($($account.id))" -ForegroundColor Green
+
+# Convert secure string to plain for ARM parameter
+$BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($AdministratorPassword)
+$AdminPwdPlain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
+
+# Check if resource group exists, create if needed
+Write-Host "🔍 Checking resource group '$ResourceGroupName'..." -ForegroundColor Yellow
+$rgExists = az group exists --name $ResourceGroupName
+if ($rgExists -eq "true") {
+    Write-Host "✅ Resource group '$ResourceGroupName' already exists" -ForegroundColor Green
+} else {
+    Write-Host "📦 Creating resource group '$ResourceGroupName' in '$Location'..." -ForegroundColor Yellow
+    az group create --name $ResourceGroupName --location $Location | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "✅ Resource group '$ResourceGroupName' created successfully" -ForegroundColor Green
+    } else {
+        Write-Error "❌ Failed to create resource group '$ResourceGroupName'"
+        exit 1
+    }
+}
+
+# Check if SQL Server exists and disable AAD-only authentication if needed
+Write-Host "🔍 Checking if SQL Server '$SqlServerName' already exists..." -ForegroundColor Yellow
+$sqlServerExists = az sql server show --name $SqlServerName --resource-group $ResourceGroupName 2>$null
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "🔧 SQL Server '$SqlServerName' exists. Checking AAD-only authentication status..." -ForegroundColor Yellow
+    
+    # Try to disable AAD-only authentication
+    Write-Host "🔓 Disabling Azure AD Only Authentication to allow SQL authentication..." -ForegroundColor Yellow
+    az sql server ad-only-auth disable --resource-group $ResourceGroupName --name $SqlServerName 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "✅ Azure AD Only Authentication disabled successfully" -ForegroundColor Green
+    } else {
+        Write-Host "⚠️  Could not disable AAD-only authentication (may already be disabled or require admin permissions)" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "📊 SQL Server '$SqlServerName' does not exist yet - will be created by deployment" -ForegroundColor Cyan
+}
+
+# Deploy
+Write-Host "🚀 Starting Bicep deployment..." -ForegroundColor Yellow
+$deployName = "sql-deploy-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+Write-Host "📋 Deployment name: $deployName" -ForegroundColor Cyan
+
+$deployment = az deployment group create `
+  --name $deployName `
+  --resource-group $ResourceGroupName `
+  --template-file (Join-Path $PSScriptRoot 'main.bicep') `
+  --parameters `
+    location=$Location `
+    sqlServerName=$SqlServerName `
+    administratorLogin=$AdministratorLogin `
+    administratorLoginPassword=$AdminPwdPlain `
+    databaseName=$DatabaseName `
+    skuName=$SkuName `
+    allowAllInternetIPs=$AllowAllInternetIPs `
+    startIpAddress=$StartIpAddress `
+    endIpAddress=$EndIpAddress | ConvertFrom-Json
+
+if ($LASTEXITCODE -ne 0 -or !$deployment) {
+    Write-Error "❌ Bicep deployment failed"
+    exit 1
+}
+
+# Generate .env file from deployment outputs
+Write-Host "📝 Generating .env configuration file..." -ForegroundColor Yellow
+$envPath = Join-Path (Split-Path $PSScriptRoot -Parent) '.env'
+
+try {
+    $envContent = @"
+# Azure SQL Configuration - Generated by deployment on $(Get-Date)
+
+# Azure SQL Server (without .database.windows.net suffix)
+SQL_SERVER_NAME=$($deployment.properties.outputs.sqlServerName.value)
+
+# Database name
+SQL_DATABASE=$($deployment.properties.outputs.databaseName.value)
+
+# Admin credentials
+SQL_USER=$($deployment.properties.outputs.administratorLogin.value)
+SQL_PASSWORD=$AdminPwdPlain
+
+# Optional: Local data directory for CSV exports
+LOCAL_OUTPUT_DIR=c:\VSProjects\Fabric-IPO\data
+
+# Streaming configuration
+BATCH_SIZE=50
+SLEEP_SECONDS=2
+"@
+
+    Set-Content -Path $envPath -Value $envContent -Encoding UTF8
+    Write-Host "✅ Deployment completed successfully!" -ForegroundColor Green
+    Write-Host "📄 Generated .env file at: $envPath" -ForegroundColor Yellow
+    Write-Host "🔗 SQL Server FQDN: $($deployment.properties.outputs.sqlFullyQualifiedDomainName.value)" -ForegroundColor Cyan
+    Write-Host "" -ForegroundColor White
+    Write-Host "🎯 Next steps:" -ForegroundColor Magenta
+    Write-Host "   1. Install UV (Python package manager): https://docs.astral.sh/uv/getting-started/installation/" -ForegroundColor White
+    Write-Host "   2. Setup Python environment: uv sync" -ForegroundColor White
+    Write-Host "   3. Run notebooks in order (01, 02, 03, 04)" -ForegroundColor White
+    Write-Host "   4. Keep notebook 03 running for streaming demo" -ForegroundColor White
+} catch {
+    Write-Error "❌ Failed to generate .env file: $_"
+    exit 1
+}
+
