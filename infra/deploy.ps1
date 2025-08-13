@@ -139,7 +139,7 @@ SLEEP_SECONDS=2
     Write-Host "🎯 Next steps:" -ForegroundColor Magenta
     Write-Host "   1. Install UV (Python package manager): https://docs.astral.sh/uv/getting-started/installation/" -ForegroundColor White
     Write-Host "   2. Setup Python environment: uv sync" -ForegroundColor White
-    Write-Host "   3. Run notebooks in order (01, 02, 03, 04)" -ForegroundColor White
+    Write-Host "   3. Run notebooks in order (01, 02, 03)" -ForegroundColor White
     Write-Host "   4. Keep notebook 03 running for streaming demo" -ForegroundColor White
 } catch {
     Write-Error "❌ Failed to generate .env file: $_"
