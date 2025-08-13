@@ -14,6 +14,7 @@ This repo contains:
 ## Prereqs
 - Azure CLI logged in (`az login`)
 - ODBC Driver 18 for SQL Server installed
+- Python 3.12
 - UV (Python package manager) - Install from: https://docs.astral.sh/uv/getting-started/installation/
 
 ## Deploy Azure SQL
